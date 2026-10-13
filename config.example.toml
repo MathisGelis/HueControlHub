@@ -1,0 +1,18 @@
+# Copier vers ~/.config/ambient-light/config.toml (aucun secret ici).
+# Seules les clés à modifier sont nécessaires ; les autres gardent leur défaut.
+
+[light]
+controller = "fake"        # "fake" = simulation, "hueble" = vraie ampoule
+address = ""               # adresse BLE (voir `ambient-light scan`) ; vide = auto
+neutral_color = "off"      # "off" ou "#RRGGBB"
+brightness = 254           # 1..254
+on_disconnect = "retry"    # retry | ignore
+
+[sources]
+claude = true
+teams = false              # non implémenté (simulation uniquement)
+
+[events.task_completed]
+color = "#00FF00"
+priority = 40
+duration = 3               # secondes ; 0 = persistant

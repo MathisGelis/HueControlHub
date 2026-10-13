@@ -1,0 +1,23 @@
+[project]
+name = "ambient-light"
+version = "0.1.0"
+description = "Ampoule Philips Hue Bluetooth comme indicateur lumineux (Claude Code, Teams)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+hue = ["HueBLE>=2.2.3"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+ambient-light = "ambient_light.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
