@@ -12,8 +12,9 @@ pour Claude Code (et, plus tard, Teams). Voir `CLAUDE.md` pour le cahier des cha
 | Installation des hooks (fusion sans écrasement) | Implémenté, testé sur fichier temporaire |
 | Contrôleur HueBLE (`controllers/hueble.py`) | Écrit d'après le code source de HueBLE 2.2.3, **NON testé sur une vraie ampoule** |
 | Reconnexion | Testée avec le faux contrôleur uniquement |
-| Hooks réels dans Claude Code | **Non testé** dans une vraie session |
-| Teams | **Non implémenté** (seulement événements simulés) |
+| Hooks réels dans Claude Code | **Testé** avec Claude Code 2.1.296 en mode `-p` (Linux, daemon `--simulate`) : `UserPromptSubmit`, `PermissionRequest` → rouge, `Stop` → vert, `SessionEnd`. Session interactive non testée |
+| Teams : presence + nouveaux messages (Graph) | Implémenté, **testé uniquement avec des réponses Graph simulées** — jamais appelé sur un vrai tenant |
+| Teams : sonnerie d'appel entrant, canaux, mentions | **Non supporté** (voir section Teams) |
 | macOS / Linux réels | **Non validé** (développé dans un conteneur cloud sans Bluetooth) |
 
 ## Architecture
@@ -43,6 +44,8 @@ ambient-light run [--simulate]          # lance le daemon (--simulate : aucune �
 ambient-light simulate permission_required   # injecte un événement (types: voir config)
 ambient-light status | ack | stop
 ambient-light install-hooks | uninstall-hooks
+ambient-light doctor                    # santé : config, hooks, daemon, Teams
+ambient-light teams-login | teams-logout | teams-check
 ```
 `install-hooks` ajoute nos entrées à `~/.claude/settings.json` (sauvegarde `.bak`, hooks existants conservés,
 idempotent). Il utilise le Python courant : lancer la commande depuis le venv où le paquet est installé.
@@ -60,7 +63,8 @@ idempotent). Il utilise le Python courant : lancer la commande depuis le venv o�
 | `SessionEnd` | efface tous les états de la session |
 
 Limite connue : si l'utilisateur refuse/répond sans qu'un de ces hooks ne se déclenche, l'alerte reste jusqu'à `ambient-light ack`.
-Les hooks sont lancés en `async` : un hook par appel d'outil (`PostToolUse`) crée un petit processus Python ; surcoût à mesurer.
+Les hooks sont **synchrones** (≈ 45 ms mesurés, daemon arrêté ; `async` testé et rejeté : Claude Code tue les hooks async à la sortie en mode `-p`, le signal vert était perdu). Un processus Python par appel d'outil (`PostToolUse`).
+`SessionEnd` ne résout que les attentes, pas le vert de fin de tâche.
 
 ## Configuration
 
@@ -76,9 +80,9 @@ sorties d'outils ne sont ni stockés ni journalisés. Les événements ne sont c
 ## Tests
 
 ```
-.venv/bin/pytest      # 15 tests : normalisation, priorités, expiration, ack, config, install hooks, daemon+reconnexion simulée
+.venv/bin/pytest      # 22 tests : normalisation, priorités, expiration, ack, config, install hooks, daemon+reconnexion simulée, Teams (Graph simulé)
 ```
-Dernier résultat : 15 passed (simulation uniquement — aucun test matériel exécuté).
+Dernier résultat : 22 passed + essai réel des hooks Claude Code (daemon simulé). Aucun test matériel, aucun appel Graph réel.
 
 ## Checklist de validation manuelle (matériel requis)
 
@@ -88,6 +92,26 @@ Dernier résultat : 15 passed (simulation uniquement — aucun test matériel ex
 5. Éteindre/éloigner l'ampoule : `status` indique `disconnected`, pas de crash ; la rallumer : l'état est réappliqué.
 6. `stop` : ampoule éteinte, socket supprimé. 7. Relancer. 8. Répéter sous macOS et Linux.
 
-## Teams (à faire — Phase 3)
+## Teams (compte professionnel) — `docs` ci-dessous
 
-Pistes à évaluer : notifications natives OS, Microsoft Graph (consentement admin probable), aucune API unique pour tout. Rien d'implémenté.
+Étude des options (la doc Microsoft Learn n'était pas accessible depuis l'environnement de dev : les points marqués **à vérifier** viennent de sources secondaires) :
+
+| Besoin | Option retenue | Remarques |
+|---|---|---|
+| Appel / réunion en cours | Graph `GET /me/presence` (`Presence.Read`, délégué), polling 15 s | `activity` = `InACall`, `InAConferenceCall`, `Presenting`, `InAMeeting`. `InAMeeting` peut aussi venir du calendrier sans réunion rejointe : réglable via `teams.meeting_counts_as_call`. Consentement utilisateur suffisant : **à vérifier** pour votre tenant |
+| Nouveaux messages (1:1, groupes) | Graph `GET /me/chats?$expand=lastMessagePreview` (`Chat.Read`, délégué), polling 20 s | Compare l'id du dernier message ; ignore vos propres messages, les messages système et les doublons. Le premier passage n'alerte pas. Consentement admin requis ou non : **à vérifier** |
+| Appel entrant (sonnerie) | **Aucune source fiable** | Pas d'événement Graph pour un utilisateur simple (les API d'appels sont pour des bots/applications). Notifications OS : pas d'API supportée sous macOS ; sous Linux, écoute D-Bus possible mais fragile → non implémenté |
+| Canaux, mentions | **Non supporté** | Nécessite des permissions administrateur et la lecture du contenu |
+
+Webhooks/change notifications Graph : écartés (exigent une URL publique, contraire au « tout local »).
+
+### Mise en place
+1. Dans Microsoft Entra (portail Azure), enregistrer une application : *Comptes de ce répertoire uniquement*, activer *Autoriser les flux clients publics*, permissions déléguées Microsoft Graph `Presence.Read`, `Chat.Read`. Si votre organisation interdit l'enregistrement d'applications ou le consentement utilisateur, demander à l'administrateur — c'est la contrainte principale. Ne pas réutiliser l'identifiant d'une application tierce.
+2. Config : `[sources] teams = true` et `[teams] client_id = "..."` (voir `config.example.toml`).
+3. `ambient-light teams-login` (code d'appareil), puis `ambient-light teams-check`, puis `ambient-light run`.
+
+### Données et confidentialité
+- Lues : `activity` de la presence ; pour chaque chat, id, type, expéditeur (id) et id du dernier message. **Le texte des messages n'est ni lu en détail, ni stocké, ni journalisé** (il est présent dans la réponse Graph mais ignoré et jeté).
+- Conservées en mémoire seulement : dernier id de message par chat. Le jeton de rafraîchissement est dans `~/.config/ambient-light/teams_token.json` (0600, hors Git), jamais journalisé. `teams-logout` le supprime.
+- Aucun service tiers : seuls `login.microsoftonline.com` et `graph.microsoft.com` sont contactés.
+- Si Graph est injoignable pendant un appel, l'état « appel en cours » reste jusqu'au prochain poll réussi.

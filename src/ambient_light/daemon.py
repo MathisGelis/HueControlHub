@@ -27,6 +27,7 @@ class Daemon:
         self._last_applied: LightState | None = None
         self.link_status = "disconnected"
         self._failures = 0
+        self.teams = None  # TeamsSource optionnel (injecté par la CLI/les tests)
 
     # --- réception -------------------------------------------------------
     def _dispatch(self, msg: dict) -> dict:
@@ -52,6 +53,7 @@ class Daemon:
             eff = self.state.effective()
             return {"ok": True, "link": self.link_status,
                     "effective": {"reason": eff.reason, "rgb": eff.rgb},
+                    "teams": self.teams.status if self.teams else "désactivé",
                     "active": self.state.snapshot()}
         if cmd == "quit":
             self._stop.set()
@@ -141,10 +143,19 @@ class Daemon:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._stop.set)
         task = asyncio.create_task(self._light_loop())
+        teams_task = None
+        if self.teams:
+            def handle(ev: Event):
+                self.state.handle(ev)
+                self._dirty.set()
+            self.teams.handle = handle
+            teams_task = asyncio.create_task(self.teams.run(self._stop))
         log.info("daemon démarré (%s)", path)
         await self._stop.wait()
         self._dirty.set()
         task.cancel()
+        if teams_task:
+            teams_task.cancel()
         server.close()
         try:
             await self.controller.apply(LightState(None, reason="shutdown"))

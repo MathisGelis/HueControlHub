@@ -75,7 +75,8 @@ def from_claude_hook(payload: object) -> list[Event]:
         types = _BLOCKING if name == "UserPromptSubmit" else ("permission_required",)
         return [_clear(sid, *types)]
     if name == "SessionEnd":
-        return [_clear(sid)]
+        # Ne pas effacer le vert de fin de tâche émis juste avant (expire seul).
+        return [_clear(sid, *_BLOCKING, "permission_required")]
     return []
 
 
@@ -83,3 +84,17 @@ def simulated(source: str, event_type: str, session: str = "sim") -> Event:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"type inconnu : {event_type}")
     return Event(source, session, "raise", event_type=event_type)
+
+
+def teams_call_state(in_call: bool) -> Event:
+    """Appel/réunion en cours (persistant tant que Graph le signale)."""
+    if in_call:
+        return Event("teams", "presence", "raise", event_type="call_ongoing")
+    return Event("teams", "presence", "clear", clear_types=("call_ongoing",))
+
+
+def teams_message(chat_id: str) -> Event:
+    """Nouveau message : seul un hash de l'identifiant de conversation est gardé."""
+    import hashlib
+    sid = hashlib.sha256(chat_id.encode()).hexdigest()[:12]
+    return Event("teams", sid, "raise", event_type="message_received")

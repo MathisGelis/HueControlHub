@@ -115,6 +115,10 @@ def test_ack_and_session_end():
     feed(sm, hook("PermissionRequest", sid="a"))
     feed(sm, hook("SessionEnd", sid="a"))
     assert sm.effective().reason == "idle"
+    feed(sm, hook("Stop", sid="a"))
+    feed(sm, hook("SessionEnd", sid="a"))  # le vert survit à la fin de session
+    assert sm.effective().reason == "task_completed"
+    sm.acknowledge()
     feed(sm, hook("PermissionRequest", sid="a"))
     assert sm.acknowledge() == 1
 

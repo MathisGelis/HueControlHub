@@ -10,9 +10,17 @@ on_disconnect = "retry"    # retry | ignore
 
 [sources]
 claude = true
-teams = false              # non implémenté (simulation uniquement)
+teams = false              # voir README (Microsoft Graph)
 
 [events.task_completed]
 color = "#00FF00"
 priority = 40
 duration = 3               # secondes ; 0 = persistant
+
+[teams]
+client_id = ""             # application Entra (client public) — voir README
+tenant = "organizations"
+poll_presence = 15
+poll_chats = 20
+messages = true
+meeting_counts_as_call = true

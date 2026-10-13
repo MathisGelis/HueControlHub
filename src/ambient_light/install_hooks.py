@@ -54,7 +54,7 @@ def install(path: Path | None = None) -> list[str]:
         groups = hooks.setdefault(ev, [])
         groups[:] = [g for g in groups if not _is_ours(g)]  # idempotent
         groups.append({"hooks": [{"type": "command", "command": cmd,
-                                  "timeout": 5, "async": True}]})
+                                  "timeout": 5}]})
     _write(path, data)
     return EVENTS
 

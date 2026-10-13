@@ -11,6 +11,7 @@ from pathlib import Path
 from . import config as cfgmod
 from .client import send
 from .config import EVENT_TYPES, ConfigError
+from .teams.http import TeamsError
 
 
 def _cfg(args):
@@ -25,12 +26,97 @@ def cmd_run(args) -> int:
         cfg["light"]["controller"] = "fake"
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ctrl = create(cfg, verbose=args.simulate)
+    daemon = Daemon(cfg, ctrl)
+    if cfg["sources"]["teams"]:
+        try:
+            daemon.teams = _teams_source(cfg, lambda ev: None)
+        except TeamsError as exc:
+            print(f"Teams désactivé : {exc}", file=sys.stderr)
     try:
-        asyncio.run(Daemon(cfg, ctrl).run())
+        asyncio.run(daemon.run())
     except RuntimeError as exc:
         print(f"erreur : {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _teams_auth(cfg):
+    from .teams.auth import Auth, TokenStore
+    t = cfg["teams"]
+    return Auth(t["client_id"], t["tenant"], TokenStore(cfgmod.teams_token_path()))
+
+
+def _teams_source(cfg, handle):
+    from .teams.source import TeamsSource
+    auth = _teams_auth(cfg)
+    if auth.store.load() is None:
+        raise TeamsError("non connecté : lancer `ambient-light teams-login`")
+    return TeamsSource(cfg["teams"], auth, handle)
+
+
+def cmd_teams_login(args) -> int:
+    try:
+        _teams_auth(_cfg(args)).login()
+    except TeamsError as exc:
+        print(f"erreur : {exc}", file=sys.stderr)
+        return 1
+    print("connecté (jeton stocké localement, permissions 0600)")
+    return 0
+
+
+def cmd_teams_logout(args) -> int:
+    from .teams.auth import TokenStore
+    print("jeton supprimé" if TokenStore(cfgmod.teams_token_path()).delete() else "aucun jeton")
+    return 0
+
+
+def cmd_teams_check(args) -> int:
+    """Un appel réel à Graph : affiche uniquement des états, jamais de contenu."""
+    from .teams.source import CHATS_URL, GRAPH, is_in_call
+    cfg = _cfg(args)
+    try:
+        src = _teams_source(cfg, lambda ev: None)
+        presence = src._call(f"{GRAPH}/me/presence")
+        print(f"presence.activity = {presence.get('activity')} "
+              f"-> appel/réunion : {is_in_call(presence, cfg['teams']['meeting_counts_as_call'])}")
+        if cfg["teams"]["messages"]:
+            print(f"chats lisibles : {len(src._call(CHATS_URL).get('value', []))}")
+    except TeamsError as exc:
+        print(f"erreur : {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    from . import install_hooks as ih
+    ok = True
+
+    def line(good, label, detail=""):
+        nonlocal ok
+        ok &= good
+        print(f"[{'OK' if good else 'KO'}] {label}{(' — ' + detail) if detail else ''}")
+    try:
+        cfg = _cfg(args)
+        line(True, "configuration", cfg["light"]["controller"])
+    except ConfigError as exc:
+        line(False, "configuration", str(exc))
+        return 1
+    import importlib.util
+    if cfg["light"]["controller"] == "hueble":
+        line(importlib.util.find_spec("HueBLE") is not None, "HueBLE installé")
+    try:
+        text = ih.settings_path().read_text(encoding="utf-8")
+        missing = [e for e in ih.EVENTS if ih.MARKER not in json.dumps(json.loads(text).get("hooks", {}).get(e, []))]
+        line(not missing, "hooks Claude Code", f"manquants : {missing}" if missing else "")
+    except (OSError, ValueError):
+        line(False, "hooks Claude Code", "settings.json absent/illisible (install-hooks)")
+    st = send({"cmd": "status"}, timeout=1)
+    line(st is not None, "daemon", "" if st is None else f"ampoule {st['link']}, teams {st.get('teams')}")
+    if cfg["sources"]["teams"]:
+        from .teams.auth import TokenStore
+        line(bool(cfg["teams"]["client_id"]), "teams.client_id")
+        line(TokenStore(cfgmod.teams_token_path()).load() is not None, "jeton Teams")
+    return 0 if ok else 1
 
 
 def cmd_check_config(args) -> int:
@@ -140,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("ack", help="acquitter tous les événements").set_defaults(fn=cmd_ack)
     sub.add_parser("stop", help="arrêter le daemon").set_defaults(fn=cmd_stop)
+    sub.add_parser("teams-login", help="connexion Teams (device code)").set_defaults(fn=cmd_teams_login)
+    sub.add_parser("teams-logout").set_defaults(fn=cmd_teams_logout)
+    sub.add_parser("teams-check", help="test réel de Graph (sans contenu)").set_defaults(fn=cmd_teams_check)
+    sub.add_parser("doctor", help="santé des intégrations").set_defaults(fn=cmd_doctor)
     sub.add_parser("install-hooks").set_defaults(fn=cmd_install_hooks)
     sub.add_parser("uninstall-hooks").set_defaults(fn=cmd_uninstall_hooks)
     return p

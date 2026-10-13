@@ -5,3 +5,4 @@ __pycache__/
 secrets.toml
 config.toml
 *.log
+teams_token.json

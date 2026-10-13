@@ -18,6 +18,14 @@ DEFAULTS: dict = {
         "reconnect_max_delay": 60,
     },
     "sources": {"claude": True, "teams": False},
+    "teams": {
+        "client_id": "",  # ID d'application Entra (client public) à enregistrer par l'utilisateur
+        "tenant": "organizations",
+        "poll_presence": 15,  # secondes
+        "poll_chats": 20,  # secondes
+        "messages": True,
+        "meeting_counts_as_call": True,  # activity InAMeeting => appel/réunion en cours
+    },
     "events": {
         "permission_required": {"color": "#FF0000", "priority": 100, "duration": 0},
         "call_incoming": {"color": "#FF0000", "priority": 90, "duration": 0},
@@ -45,6 +53,10 @@ def runtime_dir() -> Path:
 
 def socket_path() -> Path:
     return runtime_dir() / "ambient.sock"
+
+
+def teams_token_path() -> Path:
+    return default_config_path().parent / "teams_token.json"
 
 
 def default_config_path() -> Path:
@@ -91,6 +103,9 @@ def validate(cfg: dict) -> None:
     if not 1 <= light["brightness"] <= 254:
         raise ConfigError("light.brightness : 1..254")
     parse_color(light["neutral_color"])
+    teams = cfg["teams"]
+    if teams["poll_presence"] < 5 or teams["poll_chats"] < 10:
+        raise ConfigError("teams.poll_presence >= 5 et teams.poll_chats >= 10 (limites de débit Graph)")
     for name, rule in cfg["events"].items():
         if parse_color(rule["color"]) is None:
             raise ConfigError(f"events.{name}.color ne peut pas être 'off'")
